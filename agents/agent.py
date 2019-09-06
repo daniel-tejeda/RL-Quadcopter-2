@@ -4,7 +4,7 @@ import numpy as np
 
 class DDPG():
     """Reinforcement Learning agent that learns using DDPG."""
-    def __init__(self, task):
+    def __init__(self, task, learning=True):
         self.task = task
         self.state_size = task.state_size
         self.action_size = task.action_size
@@ -23,21 +23,22 @@ class DDPG():
         self.critic_target.model.set_weights(self.critic_local.model.get_weights())
         self.actor_target.model.set_weights(self.actor_local.model.get_weights())
 
-        # Noise process
-        self.exploration_mu = 0
-        self.exploration_theta = 0.15
-        self.exploration_sigma = 0.2
-        self.noise = OUNoise(self.action_size, self.exploration_mu, self.exploration_theta, self.exploration_sigma)
-
         # Replay memory
         self.buffer_size = 100000
         self.batch_size = 64
         self.memory = ReplayBuffer(self.buffer_size, self.batch_size)
 
-        # Algorithm parameters
-        self.gamma = 0.95#0.99  # discount factor
+        #Noise process
+        self.exploration_mu = 0
+        self.exploration_theta = 0.15#0.15
+        self.exploration_sigma = 0.2#0.2
+        self.noise = OUNoise(self.action_size, self.exploration_mu, self.exploration_theta, self.exploration_sigma)
+
+        #algorithm params
+        self.gamma = 1#0.99  # discount factor
         self.tau = 0.005#0.01  # for soft update of target parameters
 
+        self.learning = learning
 
     def reset_episode(self):
         self.noise.reset()
@@ -50,7 +51,7 @@ class DDPG():
         self.memory.add(self.last_state, action, reward, next_state, done)
 
         # Learn, if enough samples are available in memory
-        if len(self.memory) > self.batch_size:
+        if len(self.memory) > self.batch_size and self.learning:
             experiences = self.memory.sample()
             self.learn(experiences)
 
@@ -61,7 +62,11 @@ class DDPG():
         """Returns actions for given state(s) as per current policy."""
         state = np.reshape(state, [-1, self.state_size])
         action = self.actor_local.model.predict(state)[0]
-        return list(action + self.noise.sample())  # add some noise for exploration
+
+        if self.learning:
+            action += self.noise.sample() # add some noise for exploration
+
+        return list(action)
 
     def learn(self, experiences):
         """Update policy and value parameters using given batch of experience tuples."""

@@ -96,7 +96,7 @@ class Critic:
 
         # Try different layer sizes, activations, add batch normalization, regularizers, etc.
 
-        # Combine state and action pathways
+        # Combine state and action pathway
         net = layers.Add()([net_states, net_actions])
         net = layers.Activation('relu')(net)
 

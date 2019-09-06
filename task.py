@@ -1,4 +1,5 @@
 import numpy as np
+import math
 from physics_sim import PhysicsSim
 
 class Task():
@@ -21,75 +22,105 @@ class Task():
         self.state_size = self.action_repeat * 6
         self.action_size = 4
 
-        action_ranges = {
-            'takeoff': (405,600),
-            'land': (300, 405),
-            'hover': (406,406),
-            'reach': (300, 9000),
-            'vanilla': (0,900)
-        }
+        self.action_low = 300
+        self.action_high = 1000
 
-        self.action_low = action_ranges[task_name][0]
-        self.action_high = action_ranges[task_name][1]
+        self.runtime = runtime
 
         # Goal
         self.target_pos = target_pos if target_pos is not None else np.array([0., 0., 10.])
-        self.task_done = False
+
         self.task_name = task_name
+        self.ep_reward = 0
+        self.pos_reach_treshold = 0.5
 
 
-    def get_reward(self):
-        return eval("self.get_reward_"+self.task_name)()
+    def get_reward(self, pose_rep=[]):
+        return eval("self.get_reward_"+self.task_name)(pose_rep)
 
 
-    def get_reward_vanilla(self):
+    def get_reward_vanilla(self, pose_rep):
         """Uses current pose of sim to return reward."""
         reward = 1.-.3*(abs(self.sim.pose[:3] - self.target_pos)).sum()
         return reward
 
+    def get_reward_takeoff(self, pose_rep):
 
-    def get_reward_takeoff(self):
-        """Uses current pose of sim to return reward."""
+        #weights for x,y,z dims ---> z more important for takeoff
+        xyz_w = [.3, .3, .4]
 
-        reward = 1.-.3*(abs(self.sim.pose[:3] - self.target_pos)).sum()
+        time_reward = 1
+        dir_reward = np.dot(xyz_w, self.get_direction_reward(pose_rep))
+        pos_reward = np.dot(xyz_w, self.get_pos_reward(pose_rep))
 
-        """
-        reward = 0
-        reward += 1.-.25*(abs(self.sim.pose[0] - self.target_pos[0]))
-        reward += 1.-.25*(abs(self.sim.pose[1] - self.target_pos[1]))
-        reward += 1.-.5*(abs(self.sim.pose[2] - self.target_pos[2]))
-        """
+        #weights of direction / position / time
+        step_weights = [.15, .25, .6]
+        step_reward = np.tanh(np.dot(step_weights,[dir_reward, pos_reward, time_reward]))
 
-        if self.sim.done and self.sim.runtime > self.sim.time:
-            """ crash """
-            reward = -100
-            self.task_done = True
-        elif self.sim.pose[2] == self.target_pos[2]:
-            """ Z reward """
-            reward = 100
-            self.task_done = True
+        terminal_reward = 0
 
-        return np.tanh(reward)
+        if self.sim.done and self.sim.time < self.runtime:
+            terminal_reward = -10 #crash
+        elif self.get_task_success(pose_rep):
+            terminal_reward = 10 #target position reached
+
+
+        #print([appr_reward, pos_reward, time_reward, crash_penalty])
+        #print("reward:{} z_approx:{} z_posdiff:{} crash_penalty:{}".format(reward, z_approx, -z_posdiff, crash_penalty))
+        return step_reward + terminal_reward
+
+    def get_direction_reward(self, pose_rep):
+
+        pos_log = np.array(pose_rep)[:,:3]
+        diff_init = np.abs(np.array(pos_log - self.target_pos))
+        #print("\n",diff_init)
+        mrate = np.diff(diff_init, axis=0)
+        #print("\n",speeds)
+        dir_reward = -np.average(mrate, axis=0, weights=[.3,.7])
+        #print("\n",appr_reward)
+        return dir_reward
+
+    def get_pos_reward(self, pose_rep):
+
+        pos_diff = self.get_pos_diff(pose_rep[self.action_repeat-1])
+        pos_reward = np.array([-pd if pd > self.pos_reach_treshold else 10 for pd in pos_diff])
+        return pos_reward
+
+    def get_pos_diff(self, pose):
+        return np.abs(pose[:3] - self.target_pos)
+
+    def get_task_success(self, pose_rep):
+        pos_diff = self.get_pos_diff(pose_rep[self.action_repeat-1])
+        pos_r = np.array([0 if pd > self.pos_reach_treshold else 1 for pd in pos_diff])
+        return np.sum(pos_r) == 3
 
 
     def step(self, rotor_speeds):
         """Uses action to obtain next state, reward, done."""
         reward = 0
-        rewards = []
         pose_all = []
         for _ in range(self.action_repeat):
             done = self.sim.next_timestep(rotor_speeds) # update the sim pose and velocities
-            rewards.append(self.get_reward())
+            #reward += self.get_reward()
             pose_all.append(self.sim.pose)
 
-        done = done or self.task_done
-        reward = max(rewards)
+        reward = self.get_reward(pose_all)
+        self.ep_reward += reward
+
+        #done if target position is reached
+        done = done or self.get_task_success(pose_all)
+
         next_state = np.concatenate(pose_all)
         return next_state, reward, done
 
     def reset(self):
         """Reset the sim to start a new episode."""
-        self.task_done = False
+        self.ep_reward = 0
         self.sim.reset()
         state = np.concatenate([self.sim.pose] * self.action_repeat)
         return state
+
+
+
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))
